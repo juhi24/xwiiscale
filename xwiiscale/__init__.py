@@ -8,6 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import animation
 import matplotlib as mpl
+import uinput
 
 import xwiimote
 
@@ -20,6 +21,10 @@ N_SENS = 4
 BB_Y = 238
 BB_X = 433
 
+max_multiplier = 2
+X_MAX = 2560*max_multiplier
+Y_MAX = 1440*max_multiplier
+
 
 class BalanceMeter(threading.Thread):
     def __init__(self, devpath):
@@ -31,10 +36,15 @@ class BalanceMeter(threading.Thread):
         self.run_flag = True
 
     def run(self):
+        time.sleep(0.1)
         while self.run_flag:
             self.p.poll()
             event = xwiimote.event()
-            self.dev.dispatch(event)
+            try:
+                self.dev.dispatch(event)
+            except BlockingIOError as e:
+                print(e)
+                continue
             #  0,  1,  2,  3
             # FR, BR, FL, BL
             self.m = np.array([event.get_abs(i)[0] for i in range(N_SENS)])
@@ -42,7 +52,7 @@ class BalanceMeter(threading.Thread):
     def xy(self):
         fr, br, fl, bl = self.m
         x = fr + br - fl - bl
-        y = fl + fr - bl - br
+        y = bl + br - fl - fr
         return x, y
 
 
@@ -103,27 +113,48 @@ def wait4bb():
     return devpath
 
 
-def cop_vector(dev):
-    for fl, fr, br, bl in measurements(dev):
-        x = fr + br - fl - bl
-        y = fl + fr - br - bl
-        yield x, y
-
-
-if __name__ == '__main__':
-    bb_path = wait4bb()
-    bb = BalanceMeter(bb_path)
+def visualize(bb):
     fig, ax = plt.subplots()
     ax.set_ylim(bottom=-2000, top=2000)
     ax.set_xlim(left=-2000, right=2000)
-    bb.start()
     ln, = plt.plot([], [], 'bo')
     def update(xy):
         ln.set_data([xy[0]], [xy[1]])
     def frames():
         while True:
             yield bb.xy()
-    anim = animation.FuncAnimation(fig, update, frames=frames, interval=100)
+    return animation.FuncAnimation(fig, update, frames=frames, interval=50)
+
+
+def cursorpos(x, lim):
+    x += lim/2
+    if x>lim:
+        return lim
+    if x<0:
+        return 0
+    return int(x)
+
+
+if __name__ == '__main__':
+    bb_path = wait4bb()
+    bb = BalanceMeter(bb_path)
+    bb.start()
+    cursor = uinput.Device([
+            uinput.BTN_LEFT,
+            uinput.BTN_RIGHT,
+            uinput.ABS_X + (0, X_MAX, 0, 0),
+            uinput.ABS_Y + (0, Y_MAX, 0, 0),
+            ])
+
+    while True:
+        time.sleep(0.1)
+        x, y = bb.xy()
+        x = cursorpos(x, X_MAX)
+        y = cursorpos(y, Y_MAX)
+        cursor.emit(uinput.ABS_X, x)
+        cursor.emit(uinput.ABS_Y, y)
+
+
 #    for m in measurements(dev):
 #        print_bboard_measurements(*m)
 #    for xy in cop_vector(dev):
